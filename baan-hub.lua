@@ -899,6 +899,1585 @@ print("[Baan Hub] Loaded successfully!")
 
 	return
 end
+
+-- [FREE / NO KEY REQUIRED] Karinderya!
+if placeId == 116497287371701 or universeId == 10648820673 then
+-- Karinderya Auto Seat, Serve, Wash & Real-Time Shop Script (Complete Edition)
+-- Built with Luna Interface Suite (Patched & Anti-Blur)
+-- Features:
+--   1. Main Farm: Auto Seat, Auto Serve, Auto Wash Dishes (Hold loop), Server-wide Auto Hit Runaway
+--   2. Grocery Farm: Auto Buy Low Stock Ingredients
+--   3. Real-Time Shop Tab: Live shop scanning, Auto-Camp target items, Manual Quick Buy, Category filter
+--   4. Physics/Flings: safeTeleport with Velocity resetting & safe floor raycasts
+--   5. Universal custom draggable floating toggle button
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local StarterGui = game:GetService("StarterGui")
+local Lighting = game:GetService("Lighting")
+local LocalPlayer = Players.LocalPlayer
+
+-- Session tracking & Active resources
+local mySession = tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
+local scriptRunning = true
+local activeConnections = {}
+local activeThreads = {}
+
+-- State Flags
+local Config = {
+    AutoSeat = false,
+    AutoServe = false,
+    AutoWash = false,
+    AutoHitRunaway = false,
+    AutoBuyLowGrocery = false,
+    BuyMaxGrocery = true,
+    LowStockThreshold = 10,
+    AutoCampShop = false,
+    SelectedShopCategory = "All",
+    InstantTeleport = true,
+    Delay = 0.4
+}
+
+-- Remotes
+local Remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
+local CounterRemotes = Remotes and Remotes:WaitForChild("CounterRemotes", 10)
+local ShopRemotes = Remotes and Remotes:WaitForChild("ShopRemotes", 10)
+local MerchantRemotes = Remotes and Remotes:FindFirstChild("MerchantRemotes")
+
+local GetCounterInfo = CounterRemotes and CounterRemotes:WaitForChild("GetCounterInfo", 10)
+local AssignNPC = CounterRemotes and CounterRemotes:WaitForChild("AssignNPC", 10)
+local BuyIngredient = ShopRemotes and ShopRemotes:WaitForChild("BuyIngredient", 10)
+local GetShopInfo = ShopRemotes and ShopRemotes:WaitForChild("GetShopInfo", 10)
+local BuyFurniture = ShopRemotes and ShopRemotes:WaitForChild("BuyFurniture", 10)
+local ShopRestocked = ShopRemotes and ShopRemotes:FindFirstChild("ShopRestocked")
+local GetMerchantStock = MerchantRemotes and MerchantRemotes:FindFirstChild("GetMerchantStock")
+local BuyMerchantItem = MerchantRemotes and MerchantRemotes:FindFirstChild("BuyMerchantItem")
+
+local CustomerRanAwayEvent = Remotes and Remotes:FindFirstChild("CustomerRanAwayEvent")
+local HitRunawayEvent = Remotes and Remotes:FindFirstChild("HitRunawayEvent")
+
+-- Config Modules
+local PaintConfig, TileConfig, MaterialConfig, FurnitureConfig, IngredientsConfig, MerchantConfig
+pcall(function()
+    local Modules = ReplicatedStorage:WaitForChild("Modules", 5)
+    if Modules then
+        PaintConfig = require(Modules:WaitForChild("PaintConfig", 5))
+        TileConfig = require(Modules:WaitForChild("TileConfig", 5))
+        MaterialConfig = require(Modules:WaitForChild("MaterialConfig", 5))
+        FurnitureConfig = require(Modules:WaitForChild("FurnitureConfig", 5))
+        IngredientsConfig = require(Modules:WaitForChild("IngredientsConfig", 5))
+        MerchantConfig = require(Modules:WaitForChild("MerchantConfig", 5))
+    end
+end)
+
+-- Helper: Purge any existing 3D glass blur parts and DepthOfField effects
+local function purgeBlur()
+    pcall(function()
+        local cam = workspace.CurrentCamera
+        if cam then
+            for _, c in ipairs(cam:GetChildren()) do
+                if c.Name == "LunaBlur" or string.find(string.lower(c.Name), "blur") then
+                    pcall(function() c:Destroy() end)
+                end
+            end
+        end
+        for _, effect in ipairs(Lighting:GetChildren()) do
+            if effect:IsA("DepthOfFieldEffect") and (string.sub(effect.Name, 1, 4) == "DPT_" or string.find(string.lower(effect.Name), "luna")) then
+                pcall(function()
+                    effect.Enabled = false
+                    effect:Destroy()
+                end)
+            end
+        end
+        for id = 1, 100 do
+            pcall(function() RunService:UnbindFromRenderStep("neon::" .. tostring(id)) end)
+        end
+    end)
+end
+
+-- Helper: Clean all GUI instances from screen
+local function cleanAllGuis()
+    local containers = {
+        (gethui and gethui()),
+        game:GetService("CoreGui"),
+        LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui"),
+        Lighting
+    }
+    pcall(function()
+        table.insert(containers, game:GetService("CoreGui"):FindFirstChild("RobloxGui"))
+    end)
+    for _, container in ipairs(containers) do
+        if container then
+            for _, c in ipairs(container:GetChildren()) do
+                local lowerName = string.lower(c.Name)
+                if c.Name == "KarinderyaToggleGui"
+                   or c.Name == "Luna UI"
+                   or c.Name == "Luna-Old"
+                   or c.Name == "LunaBlur"
+                   or string.find(lowerName, "karinderya")
+                   or (c:IsA("ScreenGui") and (c:FindFirstChild("SmartWindow") or string.find(lowerName, "luna"))) then
+                    pcall(function()
+                        if c:IsA("ScreenGui") then c.Enabled = false end
+                        c:Destroy()
+                    end)
+                end
+            end
+        end
+    end
+    purgeBlur()
+end
+
+-- Full Killswitch / Cleanup Function
+local function fullCleanup()
+    scriptRunning = false
+
+    if getgenv then
+        getgenv()._KarinderyaRunning = false
+        getgenv()._KarinderyaSessionId = nil
+    end
+
+    Config.AutoSeat = false
+    Config.AutoServe = false
+    Config.AutoWash = false
+    Config.AutoHitRunaway = false
+    Config.AutoBuyLowGrocery = false
+    Config.AutoCampShop = false
+
+    for _, th in ipairs(activeThreads) do
+        pcall(task.cancel, th)
+    end
+    table.clear(activeThreads)
+
+    for _, conn in ipairs(activeConnections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    table.clear(activeConnections)
+
+    pcall(function()
+        if CustomerRanAwayEvent and getconnections then
+            for _, conn in ipairs(getconnections(CustomerRanAwayEvent.OnClientEvent)) do
+                pcall(function() conn:Disable() end)
+                pcall(function() conn:Disconnect() end)
+            end
+        end
+    end)
+
+    cleanAllGuis()
+    purgeBlur()
+
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = "Karinderya Auto",
+            Text = "🛑 ปิดและหยุดการทำงานทั้งหมดแล้ว!",
+            Duration = 3
+        })
+    end)
+end
+
+-- If a previous script session was running, completely terminate it first
+if getgenv then
+    if getgenv().KarinderyaCleanup then
+        pcall(getgenv().KarinderyaCleanup)
+    end
+    getgenv()._KarinderyaRunning = true
+    getgenv()._KarinderyaSessionId = mySession
+    getgenv().KarinderyaCleanup = fullCleanup
+end
+
+cleanAllGuis()
+task.wait(0.05)
+
+local hui = (gethui and gethui()) or game:GetService("CoreGui")
+
+local function isCurrentSession()
+    if not scriptRunning then return false end
+    if getgenv and (getgenv()._KarinderyaRunning == false or getgenv()._KarinderyaSessionId ~= mySession) then
+        return false
+    end
+    return true
+end
+
+-- Safe Teleport with Velocity Reset to prevent flinging
+local function safeTeleport(hrp, targetCF)
+    if not hrp then return end
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+    hrp.CFrame = targetCF
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+end
+
+-- Utility: Cached Restaurant Finder
+local cachedRestaurant = nil
+local lastRestaurantCheck = 0
+local function getRestaurant()
+    local lp = LocalPlayer
+    if not lp then return nil end
+    if cachedRestaurant and cachedRestaurant.Parent == workspace then
+        return cachedRestaurant
+    end
+    if os.clock() - lastRestaurantCheck < 3 then
+        return cachedRestaurant
+    end
+    lastRestaurantCheck = os.clock()
+
+    for _, v in ipairs(workspace:GetChildren()) do
+        if string.find(v.Name, "^Karenderya") then
+            local owner = v:GetAttribute("Owner")
+            if tonumber(owner) == lp.UserId or tostring(owner) == tostring(lp.UserId) or tostring(owner) == lp.Name then
+                cachedRestaurant = v
+                return v
+            end
+        end
+    end
+    return nil
+end
+
+-- Utility: Check if holding food / dirty dishes
+local function getHoldStatus()
+    local char = LocalPlayer.Character
+    if not char then return { Food = false, Dirty = false } end
+    local food, dirty = false, false
+    for _, a in ipairs(char:GetChildren()) do
+        if a:IsA("Accessory") then
+            if a:GetAttribute("IsFood") then food = true end
+            if a:GetAttribute("IsDirty") then dirty = true end
+        end
+    end
+    return { Food = food, Dirty = dirty }
+end
+
+-- ============================================================================
+-- REAL-TIME SHOP CATALOG & AUTO-CAMPING SYSTEM (NO MANUAL SCAN NEEDED)
+-- ============================================================================
+local Catalog = {}
+local CatalogByKey = {}
+local CampItems = {} -- [Key] = true
+local isUpdatingUI = false
+local isCampingShop = false
+
+local function buildCatalog()
+    table.clear(Catalog)
+    table.clear(CatalogByKey)
+
+    local function addItem(cat, key, name, price, sysType, isMerch)
+        local item = {
+            Category = cat,
+            Key = key,
+            Name = name or key,
+            Price = price or 0,
+            SystemType = sysType or "Dining",
+            IsMerchant = isMerch or false,
+            Stock = 0,
+            DisplayName = string.format("[%s] %s | ₱%s", cat, name or key, tostring(price or 0))
+        }
+        table.insert(Catalog, item)
+        CatalogByKey[key] = item
+        return item
+    end
+
+    -- 1. Stoves
+    if FurnitureConfig and FurnitureConfig.Kitchen and FurnitureConfig.Kitchen.Stoves then
+        for k, v in pairs(FurnitureConfig.Kitchen.Stoves) do
+            if type(v) == "table" and (v.Name or v.Price) then
+                addItem("Stoves", k, v.Name or k, v.Price or 0, "Kitchen")
+            end
+        end
+    end
+
+    -- 2. Tables
+    if FurnitureConfig and FurnitureConfig.Dining and FurnitureConfig.Dining.Tables then
+        for k, v in pairs(FurnitureConfig.Dining.Tables) do
+            if type(v) == "table" and (v.Name or v.Price) then
+                addItem("Tables", k, v.Name or k, v.Price or 0, "Dining")
+            end
+        end
+    end
+
+    -- 3. Chairs
+    if FurnitureConfig and FurnitureConfig.Dining and FurnitureConfig.Dining.Chairs then
+        for k, v in pairs(FurnitureConfig.Dining.Chairs) do
+            if type(v) == "table" and (v.Name or v.Price) then
+                addItem("Chairs", k, v.Name or k, v.Price or 0, "Dining")
+            end
+        end
+    end
+
+    -- 4. Materials
+    if MaterialConfig then
+        for k, v in pairs(MaterialConfig) do
+            if type(v) == "table" and (v.Name or v.Price) then
+                addItem("Materials", k, v.Name or k, v.Price or 0, "Dining")
+            end
+        end
+    end
+
+    -- 5. Paints
+    if PaintConfig then
+        for k, v in pairs(PaintConfig) do
+            if type(v) == "table" and (v.Name or v.Price) then
+                addItem("Paints", k, v.Name or k, v.Price or 0, "Dining")
+            end
+        end
+    end
+
+    -- 6. Tiles
+    if TileConfig then
+        for k, v in pairs(TileConfig) do
+            if type(v) == "table" and (v.Name or v.Price) then
+                addItem("Tiles", k, v.Name or k, v.Price or 0, "Dining")
+            end
+        end
+    end
+
+    -- 7. Merchant
+    if MerchantConfig then
+        for k, v in pairs(MerchantConfig) do
+            if type(v) == "table" and (v.Name or v.Price) then
+                addItem("Merchant", k, v.Name or k, v.Price or 0, "Merchant", true)
+            end
+        end
+    end
+
+    table.sort(Catalog, function(a, b)
+        if a.Category == b.Category then
+            return a.Name < b.Name
+        end
+        return a.Category < b.Category
+    end)
+end
+
+local function updateShopStock()
+    if #Catalog == 0 then
+        buildCatalog()
+    end
+
+    for _, item in ipairs(Catalog) do
+        item.Stock = 0
+    end
+
+    if GetShopInfo then
+        local success, shopData = pcall(function() return GetShopInfo:InvokeServer() end)
+        if success and type(shopData) == "table" then
+            for catName, list in pairs(shopData) do
+                if type(list) == "table" then
+                    for _, v in ipairs(list) do
+                        if v.Key and CatalogByKey[v.Key] then
+                            CatalogByKey[v.Key].Stock = v.Stock or 0
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if GetMerchantStock then
+        local mSuccess, mData = pcall(function() return GetMerchantStock:InvokeServer() end)
+        if mSuccess and type(mData) == "table" then
+            for _, v in ipairs(mData) do
+                if v.Key and CatalogByKey[v.Key] then
+                    CatalogByKey[v.Key].Stock = v.Stock or 0
+                end
+            end
+        end
+    end
+end
+
+local function getInStockDisplayNames(category)
+    local options = {}
+    for _, item in ipairs(Catalog) do
+        if item.Stock > 0 then
+            if category == "All" or category == "All (ทั้งหมด)" or item.Category == category then
+                table.insert(options, string.format("[%s] %s | ₱%s (สต็อก: %d)", item.Category, item.Name, tostring(item.Price), item.Stock))
+            end
+        end
+    end
+    if #options == 0 then
+        table.insert(options, "ไม่มีสินค้าพร้อมซื้อในหมวดหมู่นี้")
+    end
+    return options
+end
+
+local function getCatalogDisplayNames(category)
+    local options = {}
+    for _, item in ipairs(Catalog) do
+        if category == "All" or category == "All (ทั้งหมด)" or item.Category == category then
+            table.insert(options, item.DisplayName)
+        end
+    end
+    if #options == 0 then
+        table.insert(options, "ไม่มีสินค้าในหมวดหมู่นี้")
+    end
+    return options
+end
+
+local function findItemFromSelection(str)
+    if not str or str == "" or string.find(str, "ไม่มีสินค้า") then return nil end
+    for _, item in ipairs(Catalog) do
+        if item.DisplayName == str then return item end
+        local inStockFmt = string.format("[%s] %s | ₱%s (สต็อก: %d)", item.Category, item.Name, tostring(item.Price), item.Stock)
+        if inStockFmt == str then return item end
+    end
+    for _, item in ipairs(Catalog) do
+        local prefix = string.format("[%s] %s", item.Category, item.Name)
+        if string.sub(str, 1, #prefix) == prefix then
+            return item
+        end
+    end
+    for _, item in ipairs(Catalog) do
+        if string.find(str, item.Name, 1, true) or string.find(str, item.Key, 1, true) then
+            return item
+        end
+    end
+    return nil
+end
+
+local function buyShopItem(item)
+    if not item then return false, "ไม่ได้ระบุสินค้า" end
+    local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
+    local cash = leaderstats and leaderstats:FindFirstChild("Cash") and leaderstats.Cash.Value or 0
+    if cash < item.Price then
+        return false, "เงินไม่พอ (ขาด ₱" .. tostring(item.Price - cash) .. ")"
+    end
+
+    local buySuccess, buyRes
+    if item.IsMerchant and BuyMerchantItem then
+        buySuccess, buyRes = pcall(function() return BuyMerchantItem:InvokeServer(item.Key) end)
+    elseif BuyFurniture then
+        buySuccess, buyRes = pcall(function() return BuyFurniture:InvokeServer(item.SystemType, item.Category, item.Key) end)
+    end
+
+    if buySuccess and buyRes ~= false then
+        item.Stock = math.max(0, item.Stock - 1)
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = "🏪 ซื้อของสำเร็จ!",
+                Text = string.format("ซื้อ %s (-₱%s)", tostring(item.Name), tostring(item.Price)),
+                Duration = 3
+            })
+        end)
+        return true
+    else
+        return false, tostring(buyRes or "ซื้อไม่สำเร็จ (อาจหมดสต็อก)")
+    end
+end
+
+local function doCampShopBuy()
+    if isCampingShop or not Config.AutoCampShop then return end
+    isCampingShop = true
+    pcall(function()
+        updateShopStock()
+        for _, item in ipairs(Catalog) do
+            if not isCurrentSession() or not Config.AutoCampShop then break end
+            if CampItems[item.Key] and item.Stock > 0 then
+                local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
+                local cash = leaderstats and leaderstats:FindFirstChild("Cash") and leaderstats.Cash.Value or 0
+                if cash >= item.Price then
+                    local bought = buyShopItem(item)
+                    if bought then
+                        task.wait(0.3)
+                    end
+                end
+            end
+        end
+    end)
+    isCampingShop = false
+end
+
+-- Pre-load catalog and initial stock immediately at script load
+buildCatalog()
+pcall(updateShopStock)
+
+-- ============================================================================
+-- GROCERY & RESTAURANT FARMING
+-- ============================================================================
+local function getCurrentStock(itemKey, itemConfig)
+    local ingredients = LocalPlayer:FindFirstChild("Ingredients")
+    local maxS = itemConfig and itemConfig.MaxStock or 100
+    local val = 0
+    if ingredients then
+        local obj = ingredients:FindFirstChild(itemKey)
+        if obj then val = obj.Value end
+    end
+    local char = LocalPlayer.Character
+    if char then
+        for _, v in ipairs(char:GetChildren()) do
+            if v:IsA("Accessory") and v:GetAttribute("IsSoftdrink") then
+                local flavor = v:GetAttribute("Flavor") or v.Name
+                if flavor == itemKey then
+                    val = val + 1
+                end
+            end
+        end
+    end
+    return val, maxS
+end
+
+local isBuyingGrocery = false
+local function buyLowGrocery(force)
+    if isBuyingGrocery then return end
+    if not force and (not isCurrentSession() or not Config.AutoBuyLowGrocery) then return end
+    if not BuyIngredient or not IngredientsConfig then return end
+
+    local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
+    local cashVal = leaderstats and leaderstats:FindFirstChild("Cash") and leaderstats.Cash.Value or 0
+    if cashVal <= 0 then return end
+
+    isBuyingGrocery = true
+    pcall(function()
+        local thresholdRatio = (Config.LowStockThreshold or 10) / 100
+        for itemKey, itemConfig in pairs(IngredientsConfig) do
+            if not force and (not isCurrentSession() or not Config.AutoBuyLowGrocery) then break end
+            local curStock, maxStock = getCurrentStock(itemKey, itemConfig)
+            local ratio = curStock / maxStock
+            if ratio <= thresholdRatio then
+                local missing = maxStock - curStock
+                if missing > 0 then
+                    local yieldAmt = itemConfig.YieldAmount or 1
+                    local packsNeeded = math.max(1, math.ceil(missing / yieldAmt))
+                    local affordablePacks = math.floor(cashVal / math.max(1, itemConfig.Cost))
+                    local toBuy = math.min(packsNeeded, affordablePacks)
+
+                    if not Config.BuyMaxGrocery then
+                        toBuy = math.min(1, affordablePacks)
+                    end
+
+                    if toBuy > 0 then
+                        local success, res = pcall(function()
+                            return BuyIngredient:InvokeServer(itemKey, toBuy, "Cash")
+                        end)
+                        if success and res then
+                            local spent = toBuy * itemConfig.Cost
+                            cashVal = cashVal - spent
+                            pcall(function()
+                                StarterGui:SetCore("SendNotification", {
+                                    Title = "🛒 Auto Buy Grocery",
+                                    Text = "ซื้อ " .. tostring(itemConfig.Name) .. " x" .. tostring(toBuy) .. " (-₱" .. tostring(spent) .. ")",
+                                    Duration = 2.5
+                                })
+                            end)
+                            task.wait(0.25)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    isBuyingGrocery = false
+end
+
+-- Action: Auto Seat
+local isSeating = false
+local function doSeat()
+    if not isCurrentSession() or not Config.AutoSeat or isSeating then return end
+    if not GetCounterInfo or not AssignNPC then return end
+    isSeating = true
+    pcall(function()
+        local customer, tables = GetCounterInfo:InvokeServer()
+        if not isCurrentSession() or not Config.AutoSeat then return end
+        if customer and tables and #tables > 0 then
+            local targetTable = tables[1]
+            local npcId = customer.NpcId or customer.TemplateName
+            if npcId and targetTable then
+                AssignNPC:FireServer({
+                    Slot = targetTable.Slot,
+                    Seat = targetTable.Seat,
+                    NPCName = npcId,
+                    NpcId = npcId
+                })
+            end
+        end
+    end)
+    isSeating = false
+end
+
+-- Action: Auto Serve
+local isServing = false
+local function doServe()
+    if not isCurrentSession() or not Config.AutoServe or isServing then return end
+    local rest = getRestaurant()
+    if not rest then return end
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    isServing = true
+    pcall(function()
+        local status = getHoldStatus()
+        if not status.Food then
+            local serveFolder = rest:FindFirstChild("Serve")
+            if serveFolder then
+                for _, slot in ipairs(serveFolder:GetChildren()) do
+                    for _, item in ipairs(slot:GetChildren()) do
+                        if not isCurrentSession() or not Config.AutoServe then return end
+                        local prompt = item:FindFirstChildWhichIsA("ProximityPrompt", true)
+                        if prompt and prompt.Enabled and prompt:GetAttribute("TableAction") == "GetFood" then
+                            local promptPart = prompt.Parent
+                            if promptPart and promptPart:IsA("BasePart") then
+                                local oldCF = hrp.CFrame
+                                safeTeleport(hrp, promptPart.CFrame + Vector3.new(0, 2, 0))
+                                task.wait(0.08)
+                                if not isCurrentSession() or not Config.AutoServe then return end
+                                fireproximityprompt(prompt)
+                                task.wait(0.08)
+                                if Config.InstantTeleport and isCurrentSession() then
+                                    safeTeleport(hrp, oldCF)
+                                end
+                                return
+                            else
+                                fireproximityprompt(prompt)
+                                return
+                            end
+                        end
+                    end
+                end
+            end
+        else
+            local diningFolder = rest:FindFirstChild("DiningPlot1")
+            if diningFolder then
+                for _, prompt in ipairs(diningFolder:GetDescendants()) do
+                    if not isCurrentSession() or not Config.AutoServe then return end
+                    if prompt:IsA("ProximityPrompt") and prompt.Enabled and prompt:GetAttribute("TableAction") == "Serve" then
+                        local promptPart = prompt.Parent
+                        if promptPart and promptPart:IsA("BasePart") then
+                            local oldCF = hrp.CFrame
+                            safeTeleport(hrp, promptPart.CFrame + Vector3.new(0, 2, 0))
+                            task.wait(0.08)
+                            if not isCurrentSession() or not Config.AutoServe then return end
+                            fireproximityprompt(prompt)
+                            task.wait(0.08)
+                            if Config.InstantTeleport and isCurrentSession() then
+                                safeTeleport(hrp, oldCF)
+                            end
+                            return
+                        else
+                            fireproximityprompt(prompt)
+                            return
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    isServing = false
+end
+
+-- Helper: Get safe floor CFrame for washing dishes
+local function getSafeWashCFrame(sinkPart, char)
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    local hipHeight = humanoid and humanoid.HipHeight or 2.0
+    local rootHalfY = hrp and (hrp.Size.Y / 2) or 1.0
+    local standHeight = hipHeight + rootHalfY + 0.1
+
+    local frontDir = sinkPart.CFrame.LookVector
+    if math.abs(frontDir.Y) > 0.7 then
+        frontDir = Vector3.new(0, 0, 1)
+    else
+        frontDir = Vector3.new(frontDir.X, 0, frontDir.Z).Unit
+    end
+
+    local candidateXZ = sinkPart.Position + (frontDir * 2.2)
+    local rayOrigin = Vector3.new(candidateXZ.X, sinkPart.Position.Y + 4, candidateXZ.Z)
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = { char }
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+    local rayResult = workspace:Raycast(rayOrigin, Vector3.new(0, -12, 0), rayParams)
+    local targetY
+    if rayResult and rayResult.Position then
+        targetY = rayResult.Position.Y + standHeight
+    else
+        targetY = sinkPart.Position.Y + standHeight - 0.5
+    end
+
+    local lookTarget = Vector3.new(sinkPart.Position.X, targetY, sinkPart.Position.Z)
+    return CFrame.new(Vector3.new(candidateXZ.X, targetY, candidateXZ.Z), lookTarget)
+end
+
+-- Action: Auto Wash (Fixed: Works with Sink folder & continuous InputHoldBegin)
+local isWashing = false
+local function doWash()
+    if not isCurrentSession() or not Config.AutoWash or isWashing then return end
+    local rest = getRestaurant()
+    if not rest then return end
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local sinkFolder = rest:FindFirstChild("Sink")
+    if not sinkFolder then return end
+
+    local washPrompt = sinkFolder:FindFirstChild("Wash", true)
+    if not washPrompt or not washPrompt.Enabled or washPrompt:GetAttribute("HasDishes") ~= true then
+        return
+    end
+
+    local promptPart = washPrompt.Parent
+    if not promptPart or not promptPart:IsA("BasePart") then return end
+
+    isWashing = true
+    pcall(function()
+        local oldCF = hrp.CFrame
+        local safeCF = getSafeWashCFrame(promptPart, char)
+
+        safeTeleport(hrp, safeCF)
+        task.wait(0.15)
+
+        -- Begin wash hold
+        pcall(function() washPrompt:InputHoldBegin() end)
+
+        local t0 = os.clock()
+        -- Hold while there are dishes and session is active, up to 12s per cycle
+        while isCurrentSession() and Config.AutoWash and washPrompt.Parent and washPrompt:GetAttribute("HasDishes") == true and (os.clock() - t0) < 12 do
+            task.wait(0.5)
+            if hrp then
+                hrp.AssemblyLinearVelocity = Vector3.zero
+            end
+        end
+
+        pcall(function() washPrompt:InputHoldEnd() end)
+        task.wait(0.1)
+
+        if Config.InstantTeleport and oldCF and hrp and isCurrentSession() then
+            safeTeleport(hrp, oldCF)
+        end
+    end)
+    isWashing = false
+end
+
+-- ============================================================================
+-- RUNAWAY WHACKING SYSTEM
+-- ============================================================================
+local isHittingRunaway = false
+local lastHitTimes = {}
+
+local function canHitNPC(npc)
+    if not npc or not npc.Parent then return false end
+    local npcId = npc.Name
+    if lastHitTimes[npcId] and (os.clock() - lastHitTimes[npcId]) < 1.2 then
+        return false
+    end
+    local hum = npc:FindFirstChildOfClass("Humanoid")
+    if hum and hum.Health <= 0 then
+        return false
+    end
+    return true
+end
+
+local function isRunawayNPC(npc)
+    if not npc or not npc.Parent or not npc:IsA("Model") then return false end
+    if Players:GetPlayerFromCharacter(npc) then return false end
+
+    local hum = npc:FindFirstChildOfClass("Humanoid")
+    if hum and hum.Health <= 0 then return false end
+
+    if npc:GetAttribute("IsRunaway") == true or npc:GetAttribute("Runaway") == true or npc:GetAttribute("Runaway") == "Runaway" then
+        return true
+    end
+
+    for attrName, val in pairs(npc:GetAttributes()) do
+        local lowerKey = string.lower(tostring(attrName))
+        if string.find(lowerKey, "runaway") or string.find(lowerKey, "steal") or string.find(lowerKey, "thief") or string.find(lowerKey, "flee") or string.find(lowerKey, "stole") then
+            if val == true or val == "Runaway" or (type(val) == "string" and string.find(string.lower(val), "runaway")) then
+                return true
+            end
+        end
+    end
+
+    local state = npc:GetAttribute("State") or npc:GetAttribute("Action") or npc:GetAttribute("Status")
+    if state then
+        local lowerState = string.lower(tostring(state))
+        if string.find(lowerState, "runaway") or string.find(lowerState, "flee") or string.find(lowerState, "steal") or string.find(lowerState, "thief") or string.find(lowerState, "escape") then
+            return true
+        end
+    end
+
+    for _, desc in ipairs(npc:GetDescendants()) do
+        if desc:IsA("ProximityPrompt") and desc.Enabled then
+            local actText = string.lower(desc.ActionText or "")
+            local objText = string.lower(desc.ObjectText or "")
+            local pName = string.lower(desc.Name or "")
+            if string.find(actText, "hit") or string.find(actText, "catch") or string.find(actText, "stop")
+               or string.find(actText, "whack") or string.find(actText, "slap") or string.find(actText, "tackle")
+               or string.find(actText, "runaway") or string.find(actText, "thief") or string.find(actText, "steal")
+               or string.find(objText, "runaway") or string.find(objText, "thief")
+               or string.find(pName, "runaway") or string.find(pName, "hit") then
+                return true
+            end
+        elseif desc:IsA("BillboardGui") and desc.Enabled then
+            for _, txt in ipairs(desc:GetDescendants()) do
+                if txt:IsA("TextLabel") and txt.Visible then
+                    local lowerTxt = string.lower(txt.Text)
+                    if string.find(lowerTxt, "runaway") or string.find(lowerTxt, "thief") or string.find(lowerTxt, "steal") or string.find(lowerTxt, "hit") or string.find(lowerTxt, "escaping") then
+                        return true
+                    end
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+local function collectAllRunawayCandidates()
+    local candidates = {}
+    local seen = {}
+
+    local function addModel(m)
+        if m and m:IsA("Model") and not seen[m] then
+            seen[m] = true
+            if isRunawayNPC(m) then
+                table.insert(candidates, m)
+            end
+        end
+    end
+
+    for _, v in ipairs(workspace:GetChildren()) do
+        if string.find(v.Name, "^Karenderya") or string.find(string.lower(v.Name), "restaurant") then
+            for _, folderName in ipairs({"Customers", "Customer", "ClientNPCs", "NPCs", "Runaways", "Runaway", "ActiveNPCs"}) do
+                local sub = v:FindFirstChild(folderName)
+                if sub then
+                    for _, child in ipairs(sub:GetChildren()) do addModel(child) end
+                end
+            end
+        end
+    end
+
+    local clientNpcs = workspace:FindFirstChild("ClientNPCs")
+    if clientNpcs then
+        for _, child in ipairs(clientNpcs:GetChildren()) do addModel(child) end
+    end
+
+    for _, rootFolderName in ipairs({"NPCs", "Customers", "Runaways", "StreetNPCs", "Characters"}) do
+        local folder = workspace:FindFirstChild(rootFolderName)
+        if folder then
+            for _, child in ipairs(folder:GetChildren()) do addModel(child) end
+        end
+    end
+
+    return candidates
+end
+
+local function hitTargetNPC(target)
+    if not isCurrentSession() or not Config.AutoHitRunaway then return end
+    if not target or not target.Parent then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local targetRoot = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Torso") or target:FindFirstChild("UpperTorso") or target.PrimaryPart
+    if not targetRoot then return end
+
+    local oldCF = hrp.CFrame
+    lastHitTimes[target.Name] = os.clock()
+
+    pcall(function()
+        local forward = targetRoot.CFrame.LookVector
+        local attackPos = targetRoot.Position + (forward * 2.2) + Vector3.new(0, 0.5, 0)
+        local attackCF = CFrame.new(attackPos, targetRoot.Position)
+
+        safeTeleport(hrp, attackCF)
+
+        local tool = char:FindFirstChildOfClass("Tool")
+        if not tool then
+            local bp = LocalPlayer:FindFirstChild("Backpack")
+            if bp then
+                for _, t in ipairs(bp:GetChildren()) do
+                    if t:IsA("Tool") then
+                        t.Parent = char
+                        tool = t
+                        break
+                    end
+                end
+            end
+        end
+        if tool then
+            pcall(function() tool:Activate() end)
+            local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildWhichIsA("BasePart")
+            if handle and firetouchinterest then
+                pcall(function()
+                    firetouchinterest(handle, targetRoot, 0)
+                    firetouchinterest(handle, targetRoot, 1)
+                end)
+            end
+        end
+
+        if HitRunawayEvent then
+            pcall(function() HitRunawayEvent:FireServer(target) end)
+            pcall(function() HitRunawayEvent:FireServer(target.Name) end)
+            pcall(function() HitRunawayEvent:FireServer({ NPC = target }) end)
+        end
+
+        for _, prompt in ipairs(target:GetDescendants()) do
+            if prompt:IsA("ProximityPrompt") and prompt.Enabled then
+                pcall(function() fireproximityprompt(prompt) end)
+            end
+        end
+
+        task.wait(0.12)
+
+        if Config.InstantTeleport and oldCF and hrp and isCurrentSession() then
+            safeTeleport(hrp, oldCF)
+        end
+    end)
+end
+
+-- Throttled Runaway Scan
+local lastRunawayScan = 0
+local function scanAndHitRunaways()
+    if not isCurrentSession() or not Config.AutoHitRunaway or isHittingRunaway then return end
+    if (os.clock() - lastRunawayScan) < 2.5 then return end
+    lastRunawayScan = os.clock()
+    isHittingRunaway = true
+
+    pcall(function()
+        local runaways = collectAllRunawayCandidates()
+        for _, npc in ipairs(runaways) do
+            if not isCurrentSession() or not Config.AutoHitRunaway then break end
+            if canHitNPC(npc) then
+                hitTargetNPC(npc)
+                task.wait(0.1)
+            end
+        end
+    end)
+
+    isHittingRunaway = false
+end
+
+-- Event Listener: Customer Ran Away
+if CustomerRanAwayEvent then
+    local runawayConn = CustomerRanAwayEvent.OnClientEvent:Connect(function(...)
+        if not isCurrentSession() or not Config.AutoHitRunaway then return end
+        local args = {...}
+        local target = nil
+        for _, arg in ipairs(args) do
+            if typeof(arg) == "Instance" and arg:IsA("Model") then
+                target = arg
+                break
+            elseif type(arg) == "table" then
+                local cand = arg.NPC or arg.Npc or arg.Model or arg.Character
+                if typeof(cand) == "Instance" and cand:IsA("Model") then
+                    target = cand
+                    break
+                end
+                for _, v in pairs(arg) do
+                    if typeof(v) == "Instance" and v:IsA("Model") then
+                        target = v
+                        break
+                    end
+                end
+                if target then break end
+            elseif type(arg) == "string" then
+                target = (workspace:FindFirstChild("ClientNPCs") and workspace.ClientNPCs:FindFirstChild(arg))
+                    or workspace:FindFirstChild(arg, true)
+                if target then break end
+            end
+        end
+
+        if target and canHitNPC(target) then
+            task.spawn(hitTargetNPC, target)
+        else
+            task.spawn(scanAndHitRunaways)
+        end
+    end)
+    table.insert(activeConnections, runawayConn)
+end
+
+-- Event Listener: Shop Restocked (Live Trigger)
+if ShopRestocked then
+    local restockConn = ShopRestocked.OnClientEvent:Connect(function()
+        if not isCurrentSession() then return end
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = "🏪 ร้านค้ารีสต็อกแล้ว!",
+                Text = "อัปเดตสต็อกสินค้าใหม่ทันที...",
+                Duration = 2.5
+            })
+        end)
+        pcall(updateShopStock)
+        pcall(function()
+            if refreshShopDropdowns then refreshShopDropdowns() end
+        end)
+        if Config.AutoCampShop then
+            task.spawn(doCampShopBuy)
+        end
+    end)
+    table.insert(activeConnections, restockConn)
+end
+
+-- Non-Blocking Main Automation Loop
+local mainLoopThread = task.spawn(function()
+    local groceryCounter = 0
+    local shopCampCounter = 0
+    while isCurrentSession() do
+        task.wait(Config.Delay)
+        if not isCurrentSession() then break end
+
+        if Config.AutoSeat then
+            task.spawn(doSeat)
+        end
+        if Config.AutoServe then
+            task.spawn(doServe)
+        end
+        if Config.AutoWash and not isWashing then
+            task.spawn(doWash)
+        end
+        if Config.AutoHitRunaway and not isHittingRunaway then
+            task.spawn(scanAndHitRunaways)
+        end
+
+        groceryCounter = groceryCounter + 1
+        if groceryCounter % 5 == 0 and Config.AutoBuyLowGrocery and not isBuyingGrocery then
+            task.spawn(buyLowGrocery, false)
+        end
+
+        shopCampCounter = shopCampCounter + 1
+        if shopCampCounter % 8 == 0 then
+            pcall(updateShopStock)
+            if Config.AutoCampShop and not isCampingShop then
+                task.spawn(doCampShopBuy)
+            end
+        end
+    end
+end)
+table.insert(activeThreads, mainLoopThread)
+
+-- ============================================================================
+-- LUNA UI SETUP
+-- ============================================================================
+if getgenv then
+    getgenv().ConfirmLuna = true
+end
+
+local rawLuna = game:HttpGet("https://raw.githubusercontent.com/Nebula-Softworks/Luna-Interface-Suite/master/source.lua")
+rawLuna = string.gsub(rawLuna, "local function BlurModule%(Frame%)", "local function BlurModule(Frame) if true then return end")
+local Luna = loadstring(rawLuna)()
+
+local oldNotification = Luna.Notification
+Luna.Notification = function(self, data)
+    if type(data) == "table" and not data.ImageSource then
+        data.ImageSource = "Material"
+    end
+    return pcall(function()
+        return oldNotification(self, data)
+    end)
+end
+
+local Window = Luna:CreateWindow({
+    Name = "Karinderya! Auto",
+    Subtitle = "Farm & Live Shop Camping",
+    LogoID = "6031097225",
+    LoadingEnabled = false
+})
+
+-- ----------------------------------------------------------------------------
+-- TAB 1: Main Farm
+-- ----------------------------------------------------------------------------
+local MainTab = Window:CreateTab({
+    Name = "Main Farm",
+    Icon = "restaurant",
+    ImageSource = "Material"
+})
+
+MainTab:CreateSection("Customer & Food Automation")
+
+MainTab:CreateToggle({
+    Name = "Auto Seat Customers (ให้ลูกค้านั่ง)",
+    CurrentValue = false,
+    Flag = "AutoSeat",
+    Callback = function(val)
+        Config.AutoSeat = val
+    end
+})
+
+MainTab:CreateToggle({
+    Name = "Auto Serve Food (เสิร์ฟอาหารอัตโนมัติ)",
+    CurrentValue = false,
+    Flag = "AutoServe",
+    Callback = function(val)
+        Config.AutoServe = val
+    end
+})
+
+MainTab:CreateToggle({
+    Name = "Auto Wash Dishes (ล้างจานออโต้ - แก้ไขทำงานชัวร์ 100%)",
+    CurrentValue = false,
+    Flag = "AutoWash",
+    Callback = function(val)
+        Config.AutoWash = val
+    end
+})
+
+MainTab:CreateToggle({
+    Name = "Auto Hit Runaways (ตีลูกค้าไม่จ่ายตัง ทั้งเซิร์ฟ)",
+    CurrentValue = false,
+    Flag = "AutoHitRunaway",
+    Callback = function(val)
+        Config.AutoHitRunaway = val
+    end
+})
+
+MainTab:CreateSection("Grocery (ซื้อวัตถุดิบ 🛒)")
+
+MainTab:CreateToggle({
+    Name = "Auto Buy Low Grocery (ซื้อของที่เหลือน้อยออโต้)",
+    CurrentValue = false,
+    Flag = "AutoBuyLowGrocery",
+    Callback = function(val)
+        Config.AutoBuyLowGrocery = val
+    end
+})
+
+MainTab:CreateToggle({
+    Name = "Buy Max Stock (ซื้อจนเต็มโควต้าตามเงินที่มี)",
+    CurrentValue = true,
+    Flag = "BuyMaxGrocery",
+    Callback = function(val)
+        Config.BuyMaxGrocery = val
+    end
+})
+
+MainTab:CreateSlider({
+    Name = "Low Threshold (% สต็อกที่ถือว่าเหลือน้อย)",
+    Range = {5, 50},
+    Increment = 5,
+    CurrentValue = 10,
+    Flag = "LowStockThreshold",
+    Callback = function(val)
+        Config.LowStockThreshold = val
+    end
+})
+
+MainTab:CreateButton({
+    Name = "Buy All Low Now (กดซื้อวัตถุดิบเหลือน้อยทันที ⚡)",
+    Callback = function()
+        task.spawn(function()
+            buyLowGrocery(true)
+        end)
+    end
+})
+
+MainTab:CreateSection("Farm Settings")
+
+MainTab:CreateToggle({
+    Name = "Instant Teleport Action (วาร์ปเสร็จกลับที่เดิม)",
+    CurrentValue = true,
+    Flag = "InstantTeleport",
+    Callback = function(val)
+        Config.InstantTeleport = val
+    end
+})
+
+MainTab:CreateSlider({
+    Name = "Action Loop Delay (วินาที)",
+    Range = {0.1, 2},
+    Increment = 0.1,
+    CurrentValue = 0.4,
+    Flag = "ActionDelay",
+    Callback = function(val)
+        Config.Delay = val
+    end
+})
+
+-- ----------------------------------------------------------------------------
+-- TAB 2: Shop (ร้านค้า & ซื้อของอัตโนมัติ)
+-- ----------------------------------------------------------------------------
+local ShopTab = Window:CreateTab({
+    Name = "Shop (ร้านค้า)",
+    Icon = "store",
+    ImageSource = "Material"
+})
+
+-- Forward declarations
+local ShopStatusParagraph
+local ItemSelectDropdown
+local QuickBuyDropdown
+
+local initialInStockCount = 0
+for _, it in ipairs(Catalog) do
+    if it.Stock > 0 then initialInStockCount = initialInStockCount + 1 end
+end
+
+ShopStatusParagraph = ShopTab:CreateParagraph({
+    Title = "สถานะร้านค้า (Shop Status)",
+    Text = string.format("📦 มีของพร้อมซื้อตอนนี้: %d รายการ | สินค้าทั้งหมด: %d รายการ\n🎯 กำลังแคมป์ไว้: 0 รายการ\n⚡ ระบบอัปเดตสต็อกและสั่งซื้ออัตโนมัติแบบเรียลไทม์ (ไม่ต้องกดสแกน)",
+        initialInStockCount, #Catalog)
+})
+
+local function updateStatusText()
+    if not ShopStatusParagraph or not ShopStatusParagraph.Set then return end
+    local inStockCount = 0
+    local campedCount = 0
+    for _ in pairs(CampItems) do campedCount = campedCount + 1 end
+    for _, item in ipairs(Catalog) do
+        if item.Stock > 0 then inStockCount = inStockCount + 1 end
+    end
+
+    pcall(function()
+        ShopStatusParagraph:Set({
+            Title = "สถานะร้านค้า (Shop Status)",
+            Text = string.format("📦 มีของพร้อมซื้อตอนนี้: %d รายการ | สินค้าทั้งหมด: %d รายการ\n🎯 กำลังแคมป์ไว้: %d รายการ | อัปเดตล่าสุด: %s\n⚡ ระบบอัปเดตสต็อกและสั่งซื้ออัตโนมัติแบบเรียลไทม์ (ไม่ต้องกดสแกน)",
+                inStockCount, #Catalog, campedCount, os.date("%X"))
+        })
+    end)
+end
+
+function refreshShopDropdowns()
+    if isUpdatingUI then return end
+    isUpdatingUI = true
+
+    pcall(function()
+        updateStatusText()
+
+        if QuickBuyDropdown and QuickBuyDropdown.Set then
+            local inOpts = getInStockDisplayNames(Config.SelectedShopCategory)
+            QuickBuyDropdown:Set({
+                Options = inOpts,
+                CurrentOption = { inOpts[1] }
+            })
+        end
+
+        if ItemSelectDropdown and ItemSelectDropdown.Set then
+            local catOpts = getCatalogDisplayNames(Config.SelectedShopCategory)
+            ItemSelectDropdown:Set({
+                Options = catOpts,
+                CurrentOption = {}
+            })
+        end
+    end)
+
+    isUpdatingUI = false
+end
+
+ShopTab:CreateSection("Instant Buy (เลือกของที่มีในร้านเพื่อซื้อทันที)")
+
+ShopTab:CreateDropdown({
+    Name = "Filter Category (เลือกหมวดหมู่ที่ต้องการดู)",
+    Options = {
+        "All (ทั้งหมด)",
+        "Stoves",
+        "Tables",
+        "Chairs",
+        "Materials",
+        "Paints",
+        "Tiles",
+        "Merchant"
+    },
+    CurrentOption = { "All (ทั้งหมด)" },
+    MultipleOptions = false,
+    Callback = function(opt)
+        if isUpdatingUI then return end
+        local cat = type(opt) == "table" and opt[1] or opt
+        if string.find(cat, "All") then
+            Config.SelectedShopCategory = "All"
+        else
+            Config.SelectedShopCategory = cat
+        end
+        refreshShopDropdowns()
+    end
+})
+
+local initialInStockOpts = getInStockDisplayNames("All")
+local selectedQuickBuyItem = findItemFromSelection(initialInStockOpts[1])
+
+QuickBuyDropdown = ShopTab:CreateDropdown({
+    Name = "Select In-Stock Item (เลือกของที่พร้อมซื้อตอนนี้)",
+    Description = "คลิกเพื่อเลือกสินค้าที่มีสต็อกในร้าน แล้วกดปุ่มสั่งซื้อด้านล่าง",
+    Options = initialInStockOpts,
+    CurrentOption = { initialInStockOpts[1] },
+    MultipleOptions = false,
+    Callback = function(opt)
+        if isUpdatingUI then return end
+        local str = type(opt) == "table" and opt[1] or opt
+        selectedQuickBuyItem = findItemFromSelection(str)
+    end
+})
+
+ShopTab:CreateButton({
+    Name = "ซื้อชิ้นที่เลือกตอนนี้เลย (Buy Now) 🛒",
+    Callback = function()
+        task.spawn(function()
+            if not selectedQuickBuyItem then
+                pcall(function()
+                    StarterGui:SetCore("SendNotification", {
+                        Title = "🏪 สั่งซื้อ",
+                        Text = "กรุณาเลือกสินค้าที่มีในสต็อกก่อน",
+                        Duration = 2.5
+                    })
+                end)
+                return
+            end
+            local success, err = buyShopItem(selectedQuickBuyItem)
+            if not success then
+                pcall(function()
+                    StarterGui:SetCore("SendNotification", {
+                        Title = "⚠️ ซื้อไม่สำเร็จ",
+                        Text = tostring(err or "เกิดข้อผิดพลาด"),
+                        Duration = 3
+                    })
+                end)
+            else
+                updateShopStock()
+                refreshShopDropdowns()
+            end
+        end)
+    end
+})
+
+ShopTab:CreateSection("Auto-Buy / Camp (เฝ้าซื้อของอัตโนมัติเมื่อของเข้า)")
+
+ShopTab:CreateToggle({
+    Name = "Auto Camp Target Items (เปิดระบบเฝ้าซื้อออโต้)",
+    CurrentValue = false,
+    Flag = "AutoCampShop",
+    Callback = function(val)
+        Config.AutoCampShop = val
+        if val then
+            task.spawn(doCampShopBuy)
+        end
+        updateStatusText()
+    end
+})
+
+local initialCatalogOpts = getCatalogDisplayNames("All")
+
+ItemSelectDropdown = ShopTab:CreateDropdown({
+    Name = "Target Items to Camp (เลือกของที่จะเฝ้าซื้อ)",
+    Description = "เลือกสินค้าที่ต้องการซื้อ (เลือกได้หลายชิ้น) เมื่อของเข้าสต็อก บอทจะซื้อให้อัตโนมัติทันที",
+    Options = initialCatalogOpts,
+    CurrentOption = {},
+    MultipleOptions = true,
+    Callback = function(selectedList)
+        if isUpdatingUI then return end
+        if type(selectedList) ~= "table" then
+            if type(selectedList) == "string" then selectedList = { selectedList } else return end
+        end
+        table.clear(CampItems)
+        for _, displayStr in ipairs(selectedList) do
+            local item = findItemFromSelection(displayStr)
+            if item then
+                CampItems[item.Key] = true
+            end
+        end
+        updateStatusText()
+    end
+})
+
+ShopTab:CreateButton({
+    Name = "ล้างรายการที่เฝ้าซื้อทั้งหมด (Clear All Targets) ❌",
+    Callback = function()
+        table.clear(CampItems)
+        updateStatusText()
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = "🏪 ล้างรายการสำเร็จ",
+                Text = "ล้างรายการของที่เฝ้าซื้อทั้งหมดแล้ว",
+                Duration = 2
+            })
+        end)
+    end
+})
+
+ShopTab:CreateButton({
+    Name = "สั่งซื้อของที่เฝ้าไว้ทันที (Buy All In-Stock Camped) ⚡",
+    Callback = function()
+        task.spawn(function()
+            local prevCampState = Config.AutoCampShop
+            Config.AutoCampShop = true
+            doCampShopBuy()
+            Config.AutoCampShop = prevCampState
+            updateStatusText()
+            refreshShopDropdowns()
+        end)
+    end
+})
+
+-- ----------------------------------------------------------------------------
+-- TAB 3: Global Settings & Unload
+-- ----------------------------------------------------------------------------
+local SettingsTab = Window:CreateTab({
+    Name = "Settings",
+    Icon = "settings",
+    ImageSource = "Material"
+})
+
+SettingsTab:CreateSection("Script Control")
+
+SettingsTab:CreateButton({
+    Name = "Unload / Close Script (ปิดและหยุดการทำงานทั้งหมด 🛑)",
+    Callback = function()
+        fullCleanup()
+    end
+})
+
+-- Robust Luna Finder & Visibility Toggler
+local isMenuVisible = true
+
+local function getLunaGuis()
+    local guis = {}
+    local containers = {
+        (gethui and gethui()),
+        game:GetService("CoreGui"),
+        LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui")
+    }
+    pcall(function()
+        table.insert(containers, game:GetService("CoreGui"):FindFirstChild("RobloxGui"))
+    end)
+    for _, container in ipairs(containers) do
+        if container then
+            for _, child in ipairs(container:GetChildren()) do
+                if child:IsA("ScreenGui") then
+                    local lowerName = string.lower(child.Name)
+                    if child.Name == "Luna UI" or child.Name == "Luna-Old" or child:FindFirstChild("SmartWindow") or string.find(lowerName, "luna") then
+                        table.insert(guis, child)
+                    end
+                end
+            end
+        end
+    end
+    return guis
+end
+
+local function toggleLuna()
+    isMenuVisible = not isMenuVisible
+    local guis = getLunaGuis()
+    for _, g in ipairs(guis) do
+        g.Enabled = isMenuVisible
+        local smartWindow = g:FindFirstChild("SmartWindow")
+        if smartWindow then
+            smartWindow.Visible = isMenuVisible
+            if isMenuVisible and (smartWindow.Size.X.Offset == 0 or smartWindow.Size.Y.Offset == 0) then
+                smartWindow.Size = UDim2.fromOffset(550, 350)
+                smartWindow.BackgroundTransparency = 0
+                if smartWindow:FindFirstChild("Elements") and smartWindow.Elements.Parent then
+                    smartWindow.Elements.Parent.Visible = true
+                end
+            end
+        end
+        local drag = g:FindFirstChild("Drag")
+        if drag then drag.Visible = isMenuVisible end
+        local shadow = g:FindFirstChild("ShadowHolder")
+        if shadow then shadow.Visible = isMenuVisible end
+        local mobile = g:FindFirstChild("MobileSupport")
+        if mobile then mobile.Visible = false end
+    end
+    if not isMenuVisible then
+        purgeBlur()
+    end
+end
+
+-- Hook Close button on Luna window
+task.spawn(function()
+    task.wait(0.6)
+    local guis = getLunaGuis()
+    for _, g in ipairs(guis) do
+        local smartWindow = g:FindFirstChild("SmartWindow")
+        local controls = smartWindow and smartWindow:FindFirstChild("Controls")
+        local closeBtn = controls and controls:FindFirstChild("Close")
+        if closeBtn then
+            local btnObj = closeBtn:FindFirstChildWhichIsA("GuiButton", true) or closeBtn
+            if btnObj and btnObj:IsA("GuiButton") then
+                local conn = btnObj.MouseButton1Click:Connect(function()
+                    isMenuVisible = false
+                    g.Enabled = false
+                    if smartWindow then smartWindow.Visible = false end
+                    purgeBlur()
+                end)
+                table.insert(activeConnections, conn)
+            end
+        end
+    end
+end)
+
+-- Universal Draggable Handler
+local function makeDraggable(guiObj)
+    local dragging = false
+    local dragStart = nil
+    local startPos = nil
+
+    local conn1 = guiObj.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = guiObj.Position
+
+            local connEnd
+            connEnd = input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                    if connEnd then connEnd:Disconnect() end
+                end
+            end)
+        end
+    end)
+
+    local conn2 = UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            guiObj.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+
+    table.insert(activeConnections, conn1)
+    table.insert(activeConnections, conn2)
+end
+
+-- Floating Toggle Button
+local function createToggleButton()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "KarinderyaToggleGui"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = hui
+
+    local btn = Instance.new("TextButton")
+    btn.Name = "ToggleMenuBtn"
+    btn.Size = UDim2.new(0, 120, 0, 34)
+    btn.Position = UDim2.new(0, 15, 0.18, 0)
+    btn.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+    btn.TextColor3 = Color3.fromRGB(240, 240, 245)
+    btn.Text = "🍽️ เมนู (Toggle)"
+    btn.TextSize = 13
+    btn.Font = Enum.Font.GothamBold
+    btn.Active = true
+    btn.ZIndex = 100
+    btn.Parent = screenGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = btn
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(117, 164, 206)
+    stroke.Thickness = 1.5
+    stroke.Parent = btn
+
+    makeDraggable(btn)
+
+    local clickConn = btn.MouseButton1Click:Connect(toggleLuna)
+    table.insert(activeConnections, clickConn)
+
+    local keyConn = UserInputService.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.RightControl or input.KeyCode == Enum.KeyCode.K then
+            toggleLuna()
+        end
+    end)
+    table.insert(activeConnections, keyConn)
+end
+
+pcall(createToggleButton)
+
+	return
+end
 --// BAAN HUB v9 DISTRIBUTION - key system + AES-256 encrypted payload
 local KEY_URL = "https://pastebin.com/raw/LRU4XByY"          -- raw paste url with sha256 lines (fallback mode)
 local TOKEN_API = "https://work.ink/_api/v2/token/isValid/"  -- work.ink key system (unique token per user); empty = pastebin mode
@@ -909,9 +2488,9 @@ local KEY_UNTIL_FILE = "baan_hub_key_until.txt"
 local KEY_TTL = 3 * 60 * 60 -- seconds a validated key stays activated (3 hours)
 local DEV_KEYS = { "BAANHUB-TEST" }
 
-local PAYLOAD_KEY = "cem86gaDGJiE6e3b8bB5jjKqjFSaZEl+vv8oH8n2FUg="
-local PAYLOAD_IV = "BqFOsRszQ0+NXmDXRVDcPg=="
-local PAYLOAD_CT = "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"
+local PAYLOAD_KEY = "IqPLgnKgTVxvi5CK1F8i/QOoODzFg5Xn5tiBasPJUig="
+local PAYLOAD_IV = "UGOP1q3lW1VuWgJf0PeBfg=="
+local PAYLOAD_CT = "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"
 
 local genv = getgenv()
 genv.__autoSea = genv.__autoSea or {}
